@@ -1,5 +1,5 @@
 # Panel_Data_Analysis
-Panel Data analysis using R &amp; Python with econometric datasets
+Panel Data analysis using R with econometric datasets
 
 The folder structure follows:
 1 - Pooling Model
