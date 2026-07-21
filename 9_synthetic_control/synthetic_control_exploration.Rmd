@@ -1,0 +1,756 @@
+---
+title: "synthetic_control_exploration"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+<style>
+/* Table of Contents Styles */
+#TOC {
+  color: #333333;
+  font-family: 'Arial', sans-serif; 
+  font-size: 16px; 
+  border-color: #333333;
+}
+
+/* Header Styles */
+#header {
+  color: #B22222; 
+  background-color: #F9F9F9; 
+  opacity: 0.9; 
+  font-family: 'Arial', sans-serif;
+  font-size: 24px;
+  padding: 15px; 
+}
+
+/* Body Styles */
+body {
+  color: #000000; 
+  font-family: 'Arial', sans-serif;
+  background-color: #FFFFFF; 
+  line-height: 1.6; 
+}
+
+/*  Text Styles */
+pre {
+  color: #4D4D4D; 
+  background-color: #F0F8FF; 
+  border: 1px solid #B0C4DE; 
+  padding: 10px; 
+}
+
+/* Header Styles */
+h1, h2, h3 {
+  color: #003366;
+  font-family: 'Arial', sans-serif;
+}
+
+/* Link Styles */
+a {
+  color: #003366; 
+  text-decoration: none; 
+}
+
+a:hover {
+  text-decoration: underline; 
+}
+</style>
+
+# Introduction
+
+One really interesting estimator I never went through at university in any real depth was **Synthetic Control**. This is a great shame because it is a really exciting and honestly quite old estimator now *(and when I was studying!)*.
+
+So I thought it might be nice to add a brief *(yet quite in depth)* exploration of this estimator! 
+
+The original and commonly used package in `R` is the `Synth` package by: [insert citation].
+
+
+
+
+
+```{r setup, message=FALSE}
+library(data.table)
+library(tidyverse)
+library(Synth)
+library(haven)
+library(optimx)
+library(kernlab)
+
+options(scipen = 999)
+
+```
+
+## Synthetic Control Summary
+
+To explore the estimator I will use the famous example from ... 
+
+
+
+
+```{r simple example}
+co2 <- setDT(read_dta("/home/michael/Projects/essays/swedish_cp_replication/carbontax_fullsample_data.dta"))
+
+#select countries and filter for years
+co2_clean <- co2[country %in% c("Sweden",
+                  "Australia",
+                  "Belgium",
+                  "Canada",
+                  "Denmark",
+                  "France",
+                  "Greece",
+                  "Iceland",
+                  "Japan",
+                  "New Zealand",
+                  "Poland",
+                  "Portugal",
+                  "Spain",
+                  "Switzerland",
+                  "United States") & 
+                   year > 1959 &
+                   year < 2006]
+
+# fix id
+co2_clean[, Countryno := .GRP, by = .(country)]
+
+# clean up environment
+rm(co2)
+
+# data prep object - we will explore all this intense looking stuff in depth later :)
+D <- dataprep(foo = co2_clean,
+              predictors = c("GDP_per_capita", 
+                             "gas_cons_capita", 
+                             "vehicles_capita", 
+                             "urban_pop"),
+              predictors.op = "mean",
+              time.predictors.prior = 1980:1989,
+              special.predictors = list(
+                  list("CO2_transport_capita" , 1989 , "mean"),
+                  list("CO2_transport_capita" , 1980 , "mean"),
+                  list("CO2_transport_capita" , 1970 , "mean")
+              ),
+              dependent = "CO2_transport_capita",
+              unit.variable = "Countryno",
+              unit.names.variable = "country",
+              time.variable = "year",
+              treatment.identifier = 13,
+              controls.identifier = c(1:12,14:15),
+              time.optimize.ssr = 1960:1989,
+              time.plot = 1960:2005)
+
+# this is the wrapper function that calculates all the nice stuff for our synthetic control weights
+synth_out <- synth(data.prep.obj = D, method = 'L-BFGS-B')
+
+# fitted weight vectors (v for the predictors weights and w for the unit weights)
+synth_out$solution.v
+synth_out$solution.w
+
+# simple effects calcs
+effects <- D$Y1plot - (D$Y0plot %*% synth_out$solution.w)
+sum(effects[32:length(effects)])
+mean(effects[32:length(effects)])
+
+# percentage changes
+effects_prct <- (D$Y1plot - (D$Y0plot %*% synth_out$solution.w))/2.309894
+sum(effects_prct[32:length(effects)])
+mean(effects_prct[32:length(effects)])
+
+# tables - creates some nice objects for reporting
+synth_tables <- synth.tab(dataprep.res = D, synth.res = synth_out)
+
+## table for weights w
+synth_tables$tab.w
+
+## special predictors (X matrices)
+synth_tables$tab.pred
+synth_tables$tab.v
+
+# plots from ggplot
+## path plot
+data_plot <- data.table(year = 1960:2005,
+                        co2_actual = D$Y1plot,
+                        co2_synth = D$Y0plot %*% synth_out$solution.w,
+                        effects = D$Y1plot - (D$Y0plot %*% synth_out$solution.w))
+
+names(data_plot) <-  c("year", "co2_actual", "co2_synth", "effects")
+
+data_plot %>% 
+  ggplot(aes(x = year)) +
+  geom_line(aes(y = co2_actual, color = "Actual")) +
+  geom_line(aes(y = co2_synth, color = "Synthetic")) +
+  labs(title = "Path Plot of Actual vs Synthetic Outcomes",
+       x = "Year",
+       y = "Metric tons per capita (CO2 from transport)") +
+  scale_color_manual(name = "Outcome", values = c("Actual" = "cornflowerblue", "Synthetic" = "blue")) +
+  theme_classic()+
+  theme(legend.position = "top")+
+  geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
+
+
+## gap plot
+data_plot %>% 
+  ggplot(aes(x = year, color)) +
+  geom_line(aes(y = effects), color = "blue") +
+  labs(title = "Gap plot of calculated effect",
+       x = "Year",
+       y = "Gap in metric tons per capita (CO2 from transport)") +
+  theme_classic()+
+  theme(legend.position = "top")+
+  geom_hline(yintercept = 0, linetype = 'dashed', color = "black")+
+  geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
+
+
+# placebo test for loop
+## initialise data
+store <- matrix(NA,length(1960:2005),15)
+colnames(store) <- unique(co2_clean$country)
+
+# run loop
+for(iter in 1:15){
+ dataprep.out <-
+              dataprep(foo = co2_clean,
+                       predictors = c("GDP_per_capita" ,
+                                      "gas_cons_capita" , 
+                                      "vehicles_capita" ,
+                                      "urban_pop") ,
+                       predictors.op = "mean" ,
+                       time.predictors.prior = 1980:1989 ,
+                       special.predictors = list(
+                         list("CO2_transport_capita" , 1989 , "mean"),
+                         list("CO2_transport_capita" , 1980 , "mean") ,
+                         list("CO2_transport_capita" , 1970 , "mean")
+                         ),
+                       dependent = "CO2_transport_capita",
+                       unit.variable = "Countryno",
+                       unit.names.variable = "country",
+                       time.variable = "year",
+                       treatment.identifier = iter, # note here the loop changes the treated unit for each loop
+                       controls.identifier = c(1:15)[-iter],
+                       time.optimize.ssr = 1960:1989,
+                       time.plot = 1960:2005
+                       )
+
+# run synth
+synth.out <- synth(data.prep.obj = dataprep.out, method = 'L-BFGS-B')
+
+# store gaps
+store[,iter] <- dataprep.out$Y1plot - (dataprep.out$Y0plot %*% synth.out$solution.w)
+} # end of placebo loop
+
+data <- store
+rownames(data) <- 1960:2005
+
+# Set bounds
+gap.start     <- 1
+gap.end       <- nrow(data)
+years         <- 1960:2005
+gap.end.pre  <- which(rownames(data)=="1989")
+
+#  MSPE Pre-Treatment
+mse  <- apply(data[ gap.start:gap.end.pre,]^2,2,mean)
+sweden.mse <- as.numeric(mse[13])
+# Exclude MSPE > 20 
+data <- data[,mse<20*sweden.mse]
+Cex.set <- 1
+
+data_long <- data.table::melt(as.data.table(data, keep.rownames = TRUE),
+                              id.vars = "rn",
+                              variable.name = "Country",
+                              value.name = "Gap")
+
+data_long$Year <- as.integer(data_long$rn)
+
+data_long %>% 
+  ggplot(aes(x = Year, y = Gap, group = Country)) +
+  geom_line(data = subset(data_long, Country != "Sweden"), 
+            aes(color = "Control Countries"), color = "cornflowerblue", alpha = 0.4) +
+  geom_line(data = subset(data_long, Country == "Sweden"), 
+            aes(color = "Sweden"), color = "blue", linewidth = 1) +
+  geom_vline(xintercept = 1990, linetype = "dotted", linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 1) +
+  scale_x_continuous(breaks = seq(1960, 2005, 5)) +
+  scale_y_continuous(limits = c(-0.5, 0.5)) +
+  labs(x = "Year", y = "Gap in metric tons per capita (CO2 from transport)",
+       title = "Gap in CO2 Emissions from Transport per Capita",
+       subtitle = "Comparison between Sweden and Control Countries (Placebo)") +
+  theme_classic() +
+  theme(legend.position = "bottomleft") +
+  annotate("text", x = 1983, y = -0.5, label = "Carbon Tax", size = 4) +
+  annotate("segment", x = 1987, xend = 1989, y = -0.5, yend = -0.5, color = "black", arrow = arrow(length = unit(0.1, "inches"))) +
+  guides(color = guide_legend(override.aes = list(linetype = c(1, 1), color = c("black", "gray"), size = c(1, 0.5))))
+
+# Create a data frame for the weights
+data.frame(country = synth_tables$tab.w$unit.names,
+           Weight = synth_tables$tab.w$w.weights) %>% 
+  ggplot(aes(x = reorder(country, -Weight), y = Weight)) +
+  geom_bar(stat = "identity", fill = "cornflowerblue", color = "blue", alpha = 0.4) +
+  labs(title = "Synthetic Control Unit Weights",
+       x = "Countries",
+       y = "Weights") +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+rm(list=setdiff(ls(), "co2_clean"))
+
+```
+
+## A deep dive into Synthetic Control
+
+Now that we've seen a simple application using `Synth` lets dig into the code a bit deeper to get a better idea at what is going on underneath the hood! 
+
+Firstly, let's look at that `dataprep` object and what it does:
+
+```{r parameters}
+# below are the key arguments used in estimating the synthetic control weights for the data prep object
+
+# data prep objects parameters
+foo <-  as.data.frame(co2_clean) # this is the data.frame or table your data is stored in. In the above example this is the co2 data
+
+# these are the predictors that form (part of the) X matrices used in the optimisation problem. This is a list of the column names as strings
+predictors <-  c("GDP_per_capita", 
+                             "gas_cons_capita", 
+                             "vehicles_capita", 
+                             "urban_pop") 
+
+predictors.op <-  "mean" # the operation applie to the treated X matrix (i.e. mean or median etc - mean is usually sufficient) 
+
+# these are the (special) predictors that form (part of the) X matrices used in the optimisation problem. This is a list of a list of the lags for the output variable we want to include.
+special.predictors <-  list( 
+                  list("CO2_transport_capita" , 1989 , "mean"),
+                  list("CO2_transport_capita" , 1980 , "mean"),
+                  list("CO2_transport_capita" , 1970 , "mean")
+              ) 
+
+# this is the variable of interest
+dependent <-  "CO2_transport_capita"
+
+# this is the column name identifying the unit dimension i.e. countries numebrs "Countryno"
+# the code turns this into a column position index, so we can skip that part and just get set it as the first column 
+unit.variable <-  1
+
+# unit varibale names is the names we want to include in the final outputs i.e. the countries actual names and not just an index number
+# the code also turns this into a column position index, so we can skip that part and just get set it as the 2nd column (country)
+unit.names.variable <-  2
+
+# the column that his the time dimension in our panel
+# Similarly, the code turns this into a column position index, so we can skip that part and just get set it as the 3 column (year)
+time.variable <-  3
+
+# this is a arguement that identifies which of the `unit.variable` is the treated unit. For out case it is unit 13
+treatment.identifier  <- 13
+
+# this is a list identifying the remaining units that are controls (only one unit can be treated in this example)
+controls.identifier <-  c(1:12,14:15)
+
+# a list identifying the pretreatment periods over which the special predictors should be averaged
+time.predictors.prior <-  1980:1989
+
+# a list identifying the pretreatment periods over which the loss function is minimised
+time.optimize.ssr <-  1960:1989
+
+# this sets up the time we want to plot the data. Not important for our case tbh.
+# if nothing is provided, this will default to `time.optimize.ssr`. But in our case we will set this to the whole period.
+time.plot <-  1960:2005
+
+
+
+```
+
+Now that we've set up all the key arguements, let's explore the actual transformations.
+
+```{r transformations}
+
+# Firstly, lets identify the treated id country
+# the variable for this is 
+treatment.identifier.name <- co2_clean[Countryno == treatment.identifier, unique(country)]
+
+# next let's identify the control variables:
+controls.identifier.name <- co2_clean[Countryno != treatment.identifier, unique(country)]
+
+# next we sort by unit and then time
+setorder(foo, Countryno, year)
+
+# next the code extracts the rows relating to treatment and control units
+treatment.rows <- which(foo[,unit.variable] %in% treatment.identifier)
+control.rows   <- which(foo[,unit.variable] %in% controls.identifier)
+
+# next we want to extract the time time rows for use later
+time.predictors.prior.rows <- which(foo[,time.variable] %in% time.predictors.prior)
+time.optimize.ssr.rows <- which(foo[,time.variable] %in% time.optimize.ssr)
+
+# okay now we have the key inputs, we can start building the X matrices
+## we will start with the treated matrix X_1
+## basically, we just look for the intersection with the treated.rows we got above and return all the predictors we listed above :)
+X1 <- data.frame(foo[intersect(treatment.rows, time.predictors.prior.rows), predictors])
+
+# next we calculating the means of X1 
+
+# now we can add the column and row names (helps later on)
+colnames(X1) <- predictors
+rownames(X1) <- time.predictors.prior
+
+# now we aggregate X taking its mean
+X1 <- as.matrix(apply(X1, 2, paste(predictors.op), na.rm = TRUE))
+X1
+
+# now we can add the column and row names (yet inverted)
+rownames(X1) <- predictors
+colnames(X1) <- treatment.identifier
+
+# now we repeat for the control population
+X0 <-  data.frame(foo[intersect(control.rows, time.predictors.prior.rows), c(predictors, "Countryno")] )
+
+# now before aggregating, we split into the different units then apply the mean
+X0 <- split(X0, X0[,dim(X0)[2]])
+X0 <- sapply(X0, apply, 2, mean, na.rm = TRUE, simplify = TRUE)
+X0 <- as.matrix(X0[-dim(X0)[1],])
+
+X0
+
+# next we have to add the `special.predictors` to the matrices above. 
+# for our approache these are some lagged versions of the outcome variable (means) 
+# `Synth` uses a wrapper function for this, but we can just explore a simplified version of it
+
+# variables to help with the below forloop
+tr.numb <- treatment.identifier
+co.numb  <- controls.identifier
+unit.var <-  unit.variable #"Countryno"
+time.var <-  time.variable
+foo.object <- foo
+X0.inner <- X0
+X1.inner <- X1
+          
+          
+# however we will need to apply the method to each special predictor i.e. a for-loop
+for(i in 1:length(special.predictors)){
+          list.object <- special.predictors[[i]]
+          
+          
+          # extract treated and contrl row identifiers
+          special.units.tr <- which(is.element(foo.object[,unit.var], tr.numb) == TRUE)
+          special.units.co <- which(is.element(foo.object[,unit.var], co.numb) == TRUE)
+          
+          # extract special time periods for transformation
+          special.times <- which(is.element(foo.object[,time.var], list.object[[2]]) == TRUE)
+          
+          # extract special predictor column 
+          # if(mode(list.object[[1]]) == "character"){
+          #   list.object[[1]] <- which(names(foo.object) == list.object[[1]])
+          #   }
+          # 
+          # create names - this might look confusing but it is just pasting together strings from the special predictors list provided :)
+          name.predictor <- paste("special.", list.object[[1]], ".", paste(list.object[[2]], sep = ""), sep = "")
+          
+          # now we can create X1
+          X1.special <- as.matrix(foo.object[intersect(special.units.tr, special.times), list.object[[1]]])
+          
+          # name rows and columns again 
+          rownames(X1.special) <- foo.object[intersect(special.units.tr, special.times), time.var]
+          colnames(X1.special) <- tr.numb
+          
+          # aggregate if only one time period is there (this is probably unecessary for our example)
+          if(length(list.object[[2]]) > 1){
+            X1.special <- apply(X1.special,
+                            2,
+                            paste(list.object[[3]]),
+                            na.rm = TRUE)
+            }
+          
+          # now we can combine it to the existing X1
+          X1.special <- t(as.matrix(X1.special))
+          X1.inner <- rbind(X1.inner, X1.special)
+          rownames(X1.inner)[nrow(X1.inner)] <- name.predictor
+          
+          
+          # now we basically repeat this for the controls
+          X0.special <- as.matrix(foo.object[intersect(special.units.co, special.times), c(list.object[[1]])])
+          
+          X0.special <- matrix(X0.special[,1], byrow = FALSE, ncol = length(co.numb))
+          
+          ## deinfe the columns and rows
+          row.names(X0.special) <- foo.object[intersect(special.units.tr, special.times), time.var]
+          colnames(X0.special) <- co.numb
+          
+           if(length(list.object[[2]]) > 1){
+             X0.special <- apply(
+                            X0.special,
+                            2,
+                            paste(list.object[[3]]),
+                            na.rm = TRUE
+                            )
+             X0.special <- t(as.matrix(X0.special))
+           }
+          
+          X0.inner <- rbind(X0.inner,X0.special)
+          rownames(X0.inner)[nrow(X0.inner)] <- name.predictor
+          
+          X1 <- X1.inner
+          X0 <- X0.inner
+
+           # now go and built matrices
+           # spf <- spec.pred.func(list.object = special.predictors[[i]],
+           #                        tr.numb = treatment.identifier,
+           #                        co.numb = controls.identifier,
+           #                        unit.var = unit.variable,
+           #                        time.var = time.variable,
+           #                        foo.object = foo,
+           #                        X0.inner = X0,
+           #                        X1.inner = X1
+           #                        )
+           # 
+           #  X0 <- spf[[1]]
+           #  X1 <- spf[[2]]
+
+          }
+
+# clear up environ after loop
+rm(X0.special, X1.special,  X0.inner, X1.inner, tr.numb, co.numb , unit.var, time.var, foo.object)
+gc()
+
+# great we now have the general X matrices! Now we can go onto the Z matrices :)
+Z1 <- as.matrix(foo[intersect(treatment.rows,time.optimize.ssr.rows), dependent])
+
+## set up row and col names again 
+rownames(Z1) <- time.optimize.ssr
+colnames(Z1) <- treatment.identifier
+
+# now for Z0 (controls) - note it has to be sent wide such that each column refers to one treated unit
+# Z0 <- as.matrix(foo[intersect(control.rows,time.optimize.ssr.rows), c(dependent)])
+
+Z0 <- matrix(as.matrix(foo[intersect(control.rows,time.optimize.ssr.rows), c(dependent)]),
+             byrow = FALSE,
+             nrow = length(time.optimize.ssr),
+             ncol = length(controls.identifier)
+             )
+                 
+colnames(Z0)<- controls.identifier
+rownames(Z0)<- time.optimize.ssr
+
+# now we have all the key elements for the optimisation problem, but one extra thing the function does
+# is return the plot time series for the treated unit, plus the matrices for the control units to create the counterfactual
+# this is basically more of the same above but now we're using `time.variable` instead of `tine.optimize.ssr` or `time.predictors.prior` 
+# hopefully these transformations don't need to much more explanation
+
+# treated time pliot
+time.plot.rows <- which(is.element(foo[,time.variable], time.plot ) == TRUE)
+
+Y1plot <- as.matrix(foo[intersect(treatment.rows, time.plot.rows), dependent])
+rownames(Y1plot) <- time.plot
+colnames(Y1plot) <- treatment.identifier
+
+Y0plot  <- matrix(as.matrix(foo[intersect(control.rows, time.plot.rows), c(dependent)]),
+                  byrow = FALSE,
+                  nrow = length(time.plot),
+                  ncol = length(controls.identifier))
+rownames(Y0plot) <- time.plot
+colnames(Y0plot) <- controls.identifier
+
+# the last little thing the data prep function does that's helpful is store all this in a nice list to call much easier later on
+
+# this returns a data.frame matchign the unit names and their numbers so you can easily track which number relates to which unit
+names.and.numbers <- data.frame(c(treatment.identifier.name,controls.identifier.name), c(treatment.identifier,controls.identifier))
+names(names.and.numbers) <- c("unit.names", "unit.numbers")
+
+output <- list(X0 = X0,
+               X1 = X1,
+               Z0 = Z0,
+               Z1 = Z1,
+               Y0plot = Y0plot,
+               Y1plot = Y1plot,
+               names.and.numbers = names.and.numbers)
+
+```
+
+
+Okay great, we've now for all the data structures we need to estimate $W$. We have $Z_1$, $Z_0$, $X_1$ and $X_0$. We also have the matrices to calculate the counterfactual. 
+
+But before, we do that we have to solve the optimisation problem! 
+
+There are a lot more checks and balances in the actual source code to make sure you don't mess anything up. But for our purposes of exploration, the above will suffice :)
+
+```{r optimisation function}
+
+#View(fn.V)
+
+test_fn.V <-function(
+           variables.v = stop("variables.v missing"),
+           X0.scaled = stop("X0.scaled missing"),
+           X1.scaled = stop("X1.scaled missing"),
+           Z0 = stop("Z0 missing"),
+           Z1 = stop("Z1 missing"),
+           margin.ipop = 0.0005,
+           sigf.ipop = 5,
+           bound.ipop = 10
+           ){
+    # rescale par
+    V <- diag(x=as.numeric(abs(variables.v)/sum(abs(variables.v))),
+              nrow=length(variables.v),
+              ncol=length(variables.v))
+    
+    # set up QP problem
+    H <- t(X0.scaled) %*% V %*% (X0.scaled)
+    a <- X1.scaled
+    c <- -1*c(t(a) %*% V %*% (X0.scaled) )
+    A <- t(rep(1, length(c)))
+    b <- 1
+    l <- rep(0, length(c))
+    u <- rep(1, length(c))
+    r <- 0
+    
+    # run solver and obtain w weights
+    res <- ipop(c = c, H = H, A = A, b = b, l = l, u = u, r = r,
+                  bound = bound.ipop, margin = margin.ipop,
+                  maxiter = 1000, sigf = sigf.ipop)
+    solution.w <- as.matrix(primal(res))
+            
+    # compute losses
+    loss.w <- as.numeric(t(X1.scaled - X0.scaled %*% solution.w) %*% (V) %*% (X1.scaled - X0.scaled %*% solution.w))
+
+    loss.v <- as.numeric(t(Z1 - Z0 %*% solution.w) %*% (Z1 - Z0 %*% solution.w ))
+    loss.v <- loss.v/nrow(Z0)
+
+    return(invisible(loss.v))
+  }
+
+```
+
+
+
+So, let's explore how we can solve the optimisation problem. 
+
+```{r optimisation problem}
+
+# The first thing we do is normalise X by the variance - this returns some scaled matrices to us (scaled by variance of each predictor)
+nvarsV <- dim(X0)[1]
+big.dataframe <- cbind(X0, X1)
+divisor <- sqrt(apply(big.dataframe, 1, var))
+
+scaled.matrix <- t(t(big.dataframe) %*% ( 1/(divisor) * diag(rep(dim(big.dataframe)[1], 1)) )) # last bit is the identify matrix such that it becomes the variance matrix once multiplied by variance estimates
+
+X0.scaled <- scaled.matrix[, 1:ncol(X0), drop = FALSE]
+X1.scaled <- scaled.matrix[, ncol(scaled.matrix)]
+
+# okay now we can set up the optimsiation problem
+## the package gives the option to use `genoud` but we won't go into that
+## for us we can set the initial parameter guesses as equal weight
+
+SV1 <- rep(1/nvarsV,nvarsV)
+
+# now we can estimate the parameters
+res1 <- optimx(par=SV1, # initial guesses
+                      fn=fn.V, # function
+                      gr=NULL, # gradient not provided
+                      hess=NULL, # donhessian not procided
+                      method=optimxmethod,  
+                      itnmax=NULL, # no max iterations
+                      hessian=FALSE, # don't return hessian 
+                             control=list(kkt=FALSE,
+                                          starttests=FALSE,
+                                          dowarn=FALSE,
+                                          all.methods=all.methods),
+                      X0.scaled = X0.scaled,
+                      X1.scaled = X1.scaled,
+                      Z0 = Z0,
+                      Z1 = Z1,
+                    quadopt = quadopt,
+               margin.ipop = Margin.ipop,
+               sigf.ipop = Sigf.ipop,
+               bound.ipop = Bound.ipop)
+
+# the collect.otpimx() is just a helpful little function that returns the parameters of itnerest for use
+# run this code if you want to have a look at it
+# view(collect.optimx)
+
+res1 <- collect.optimx(res1,"min")
+
+# round 2
+Xall <- cbind(X1.scaled,X0.scaled)
+Xall <- cbind(rep(1,ncol(Xall)),t(Xall))
+Zall <- cbind(Z1,Z0)
+Beta <- try(solve(t(Xall)%*%Xall)%*%t(Xall)%*%t(Zall),silent=TRUE) # this is just ols
+
+Beta <- Beta[-1,]
+V    <- Beta%*%t(Beta)
+SV2  <- diag(V)
+SV2 <- SV2 / sum(SV2)
+  
+res2 <- optimx(par=SV2, 
+               fn=fn.V,
+                             gr=NULL, hess=NULL, 
+                             method=optimxmethod, itnmax=NULL, hessian=FALSE,
+                             control=list(kkt=FALSE,
+                                          starttests=FALSE,
+                                          dowarn=FALSE,
+                                          all.methods=all.methods),
+                             X0.scaled = X0.scaled,
+                             X1.scaled = X1.scaled,
+                             Z0 = Z0,
+                             Z1 = Z1,
+                             quadopt = quadopt,
+                             margin.ipop = Margin.ipop,
+                             sigf.ipop = Sigf.ipop,
+                             bound.ipop = Bound.ipop
+                            )
+
+res2 <- collect.optimx(res2,"min")
+
+solution.v   <- abs(res2$par)/sum(abs(res2$par))
+
+# great now that we have the solution for V* we can recover W(V*):
+
+V <- diag(x=as.numeric(solution.v),nrow=nvarsV,ncol=nvarsV)
+H <- t(X0.scaled) %*% V %*% (X0.scaled)
+a <- X1.scaled
+c <- -1*c(t(a) %*% V %*% (X0.scaled) )
+A <- t(rep(1, length(c)))
+b <- 1
+l <- rep(0, length(c))
+u <- rep(1, length(c))
+r <- 0
+
+res <- ipop(c = c, 
+            H = H, 
+            A = A, 
+            b = b, 
+            l = l, 
+            u = u, 
+            r = r,
+            margin =  0.0005,
+            maxiter = 1000,
+            sigf = 5, 
+            bound = 10)
+
+solution.w <- as.matrix(primal(res))
+
+# add names to out solutions
+rownames(solution.w) <- colnames(X0)
+colnames(solution.w) <- "w.weight"
+names(solution.v) <- rownames(X0)
+
+# estimate loss function values at solution
+loss.w <- t(X1.scaled - X0.scaled %*% solution.w) %*% V %*% (X1.scaled - X0.scaled %*% solution.w)
+loss.v <- t(Z1 - Z0 %*% as.matrix(solution.w)) %*% (Z1 - Z0 %*% as.matrix(solution.w)) /nrow(Z0)      
+
+# now we have the optimised solutions for W(V)
+#
+data.frame(round(solution.w,4),
+            output$names.and.numbers[-which(output$names.and.numbers[,2]==treatment.identifier),]
+            )
+
+matrix(round(solution.v,4),
+       nrow=length(solution.v))
+ 
+
+data.table(year = 1960:2005,
+           co2_actual = Y1plot,
+           co2_synth = Y0plot %*% solution.w,
+           effects = Y1plot - (Y0plot %*% solution.w))
+
+
+```
+
+
+
+Now that we've explored what's going on under the hood, be thankful you can just call `Synth()` instead of having to code this up everytime! 
+
+Big thanks to the author(s) for writing up this amazing package :)
