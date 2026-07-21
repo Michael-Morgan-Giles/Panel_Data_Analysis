@@ -619,7 +619,13 @@ test_fn.V <-function(
 So, let's explore how we can solve the optimisation problem. 
 
 ```{r optimisation problem}
-
+# some arguements that are helpful to set up at the start
+optimxmethod <- c("Nelder-Mead","BFGS")
+quadopt <-  "ipop"
+Margin.ipop <- 0.0005
+Sigf.ipop <- 5
+Bound.ipop <-  10
+all.methods <- FALSE
 # The first thing we do is normalise X by the variance - this returns some scaled matrices to us (scaled by variance of each predictor)
 nvarsV <- dim(X0)[1]
 big.dataframe <- cbind(X0, X1)
@@ -663,38 +669,38 @@ res1 <- optimx(par=SV1, # initial guesses
 
 res1 <- collect.optimx(res1,"min")
 
-# round 2
-Xall <- cbind(X1.scaled,X0.scaled)
-Xall <- cbind(rep(1,ncol(Xall)),t(Xall))
-Zall <- cbind(Z1,Z0)
-Beta <- try(solve(t(Xall)%*%Xall)%*%t(Xall)%*%t(Zall),silent=TRUE) # this is just ols
+# # round 2
+# Xall <- cbind(X1.scaled,X0.scaled)
+# Xall <- cbind(rep(1,ncol(Xall)),t(Xall))
+# Zall <- cbind(Z1,Z0)
+# Beta <- try(solve(t(Xall)%*%Xall)%*%t(Xall)%*%t(Zall),silent=TRUE) # this is just ols
+# 
+# Beta <- Beta[-1,]
+# V    <- Beta%*%t(Beta)
+# SV2  <- diag(V)
+# SV2 <- SV2 / sum(SV2)
+#   
+# res2 <- optimx(par=SV2, 
+#                fn=fn.V,
+#                              gr=NULL, hess=NULL, 
+#                              method=optimxmethod, itnmax=NULL, hessian=FALSE,
+#                              control=list(kkt=FALSE,
+#                                           starttests=FALSE,
+#                                           dowarn=FALSE,
+#                                           all.methods=all.methods),
+#                              X0.scaled = X0.scaled,
+#                              X1.scaled = X1.scaled,
+#                              Z0 = Z0,
+#                              Z1 = Z1,
+#                              quadopt = quadopt,
+#                              margin.ipop = Margin.ipop,
+#                              sigf.ipop = Sigf.ipop,
+#                              bound.ipop = Bound.ipop
+#                             )
+# 
+# res2 <- collect.optimx(res2,"min")
 
-Beta <- Beta[-1,]
-V    <- Beta%*%t(Beta)
-SV2  <- diag(V)
-SV2 <- SV2 / sum(SV2)
-  
-res2 <- optimx(par=SV2, 
-               fn=fn.V,
-                             gr=NULL, hess=NULL, 
-                             method=optimxmethod, itnmax=NULL, hessian=FALSE,
-                             control=list(kkt=FALSE,
-                                          starttests=FALSE,
-                                          dowarn=FALSE,
-                                          all.methods=all.methods),
-                             X0.scaled = X0.scaled,
-                             X1.scaled = X1.scaled,
-                             Z0 = Z0,
-                             Z1 = Z1,
-                             quadopt = quadopt,
-                             margin.ipop = Margin.ipop,
-                             sigf.ipop = Sigf.ipop,
-                             bound.ipop = Bound.ipop
-                            )
-
-res2 <- collect.optimx(res2,"min")
-
-solution.v   <- abs(res2$par)/sum(abs(res2$par))
+solution.v   <- abs(res1$par)/sum(abs(res1$par))
 
 # great now that we have the solution for V* we can recover W(V*):
 
@@ -704,10 +710,11 @@ a <- X1.scaled
 c <- -1*c(t(a) %*% V %*% (X0.scaled) )
 A <- t(rep(1, length(c)))
 b <- 1
-l <- rep(0, length(c))
-u <- rep(1, length(c))
-r <- 0
+l <- rep(0, length(c)) # lwoer bound
+u <- rep(1, length(c)) # upper bound
+r <- 0 #  
 
+# https://www.rdocumentation.org/packages/kernlab/versions/0.9-29/topics/ipop
 res <- ipop(c = c, 
             H = H, 
             A = A, 
@@ -732,14 +739,24 @@ loss.w <- t(X1.scaled - X0.scaled %*% solution.w) %*% V %*% (X1.scaled - X0.scal
 loss.v <- t(Z1 - Z0 %*% as.matrix(solution.w)) %*% (Z1 - Z0 %*% as.matrix(solution.w)) /nrow(Z0)      
 
 # now we have the optimised solutions for W(V)
-#
+# table for W
 data.frame(round(solution.w,4),
-            output$names.and.numbers[-which(output$names.and.numbers[,2]==treatment.identifier),]
-            )
+           names.and.numbers[-which(output$names.and.numbers[,2]==treatment.identifier),])
 
-matrix(round(solution.v,4),
-       nrow=length(solution.v))
- 
+# predictor comparisons
+tab.pred <- round(cbind(X1,
+                        as.matrix(X0)%*%as.matrix(solution.w),
+                        apply(as.matrix(X0),1,mean)), 4)
+                          
+colnames(tab.pred) <- c("Treated",
+                            "Synthetic",
+                            "Sample Mean")
+
+tab.pred
+# table for V
+tab.v <- matrix(round(solution.v, 4), nrow=length(solution.v))
+rownames(tab.v) <- rownames(X1)
+colnames(tab.v) <- c("v.weights")
 
 data.table(year = 1960:2005,
            co2_actual = Y1plot,
