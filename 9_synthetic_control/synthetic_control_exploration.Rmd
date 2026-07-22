@@ -63,7 +63,7 @@ One really interesting estimator I never went through at university in any real 
 
 So I thought it might be nice to add a brief *(yet quite in depth)* exploration of this estimator! 
 
-The most commonly used package in `R` is the `Synth` package by Jens Hainmueller and co: Jens Hainmueller aut cre, Alexis Diamond aut, Alberto Abadie aut (2011). “Synth: An R Package for Synthetic Control Methods in Comparative Case Studies.” _Journal of Statistical Software_, *42*(13), 1-17. <https://www.jstatsoft.org/v42/i13/>.
+The most commonly used package in `R` is the `Synth` package by *Jens Hainmueller and co: Jens Hainmueller aut cre, Alexis Diamond aut, Alberto Abadie aut (2011). “Synth: An R Package for Synthetic Control Methods in Comparative Case Studies.” _Journal of Statistical Software_, 42(13), 1-17. <https://www.jstatsoft.org/v42/i13/>*.
 
 The package is really simple to use and generally robust for most quasi-experimental panel data applications. So let's explore what the Synthetic Control esitmator is, a neat application of it and then a bit of a peak under the hood as to what is going on in the `Synth()` function. 
 
@@ -81,20 +81,26 @@ options(scipen = 999)
 
 # Synthetic Control Summary
 
-... 
+... summarise high level ... 
 
 # Synthetic Control Example
 
 To explore the estimator I will use the famous example from the paper: *Andersson, J.J., 2019. Carbon taxes and CO2 emissions: Sweden as a case study. American Economic Journal: Economic Policy, 11(4), pp.1-30*.
 
-The paper exploits a natural experiment to ... 
+The paper exploits a natural experiment to estimate the effect a carbon tax has on Co2 emissions. In 1990, Sweden was the first country in the world to implement a carbon tax. Because they were the first to implement a carbon tax, they can be compared against other "similar" units to estimate an effect on emissions. You might be thinking of applying a difference-in-differences estimator in a scenario like this and you wouldn't be the first to think that. Unfortunately, the dreaded parallel trends assumption for DiD has raised it's head again in this scenario such that the estimator is potentially biased. 
+
+This is where the "synthetic control" comes in because it can relax the parallel trends assumption. Because the synthetic control estimator creates weights that take just the "best" parts of all the control units to compare against the treated units outcome variable, the parallel trends assumption is not necessary (dependant on the pre-intervention fit). 
 
 
+So basically, this study utilised this natural experiment to construct a “synthetic version” of Sweden, that never implemented a carbon tax. This allows a comparison of emissions between “synthetic” Sweden that never implemented a carbon tax, and “actual” Sweden that did implement a carbon tax in 1990. If the fit is good, well then in theory the differences between "actual" and "synthetic" Sweden should be entirely because of the carbon tax, and not some other unobserved factor. In short it would be a causal effect. 
 
+This is why SC has become such a popular esitmator such that it has been labelled by Susan Athey &  Guido W. Imbens as “the most important innovation in the policy evaluation literature in the last few years”, https://www.aeaweb.org/articles?id=10.1257/jep.31.2.3.
 
+So enough blabbering about the estimator, let's take a look at its application using `Synth`.
 
 
 ```{r simple example}
+
 co2 <- setDT(read_dta("/home/michael/Projects/essays/swedish_cp_replication/carbontax_fullsample_data.dta"))
 
 #select countries and filter for years
@@ -304,10 +310,15 @@ rm(list=setdiff(ls(), "co2_clean"))
 
 Now that we've seen a simple application using `Synth` and the sort of results you can produce with it, lets dig into the code a bit deeper to get a better idea at what is going on underneath the hood! 
 
-
-
 ## data transformations
-Firstly, let's look at that `dataprep` object and what it does:
+
+Now, we saw that complex looking `dataprep()` function that returns transformed data that can feed directly into the `Synth()` function itself. 
+
+This probably seems like a blackbox that just handily outputs the data we need to calculate the weights. But, really the transformations aren't really that complex.
+
+So, I thought it would be helpful to illustrate what this function is actually doing. 
+
+Firstly, let's look some of the inputs in the `dataprep` object and what they do:
 - `foo` is the data.frame or table your data is stored in. In the above example this is the `co2_data`. 
 
 ```{r parameters}
@@ -362,7 +373,16 @@ time.plot <-  1960:2005
 
 ```
 
-Now that we've set up all the key arguements, let's explore the actual transformations.
+Now that we've set up all the key arguments, let's explore the actual transformations.
+
+Firstly let's look at the $X_i$ matrices. From above, we know that these matrices basically contain variables (`predictors`) that help fit the weights we want to estimate. $X_1$ is the mean of all the treated units predictors (plus some lags in our example - contained in the `special.predictors` argument). $X_0$  is the same but for the control units. 
+
+Note that to make sure the dimensions line up, we have to transpose these tables such that the columns relate to the units.
+
+
+Secondly, the $Z_i$ matrices contain the outcome variable over the period we want to optimise (pre-intervention period denote by the `time.optimize.ssr` argument). The transformations for this again are quite simple such that we basically just cast the unit row to the columns such that we get a matrix with $T$ rows and $n$ columns. All the elements in this matrix are for the outcome variable (the `dependent` argument). Obviously we complete these transformations separately for the treated and control units.
+
+Another helpful object the `dataprep()` function returns is the `Y1plot` and `Y0plot` dataframes. The transformations for these are exactly the same as the $Z_i$ matrices, however we now include all the time periods (pre- and post-intervention - set by the `time.plot` but we don't have to make any filters). This becomes helpful when constructing the counterfactual because the `synth_cf = w.solution %*% Y0plot` that can be easily compared to `Y1plot` to estimate the effect. 
 
 ```{r alt transformations}
 # X0
@@ -432,31 +452,18 @@ names.and.numbers <- data.frame(c(co2_clean[Countryno ==treatment.identifier, un
 names(names.and.numbers) <- c("unit.names", "unit.numbers")
 ```
 
-There are a lot more checks and balances in the actual source code to make sure you don't mess anything up when you set up the `dataprep` object. But for our purposes of exploration, the above transformations show what the underlying source code achieves. So it will suffice for now :)
+
+## Loss function
+
+There are a lot more checks and balances in the actual source code to make sure you can't (or don't) mess anything up when you set up the `dataprep` object. But for our purposes of exploration, the above transformations show what the underlying source code achieves. So it will suffice for now :)
 
 ## Optimisation Problem
 
-Okay great, we've now for all the data structures we need to estimate $W$. We have $Z_1$, $Z_0$, $X_1$ and $X_0$. We also have the matrices to calculate the counterfactual. But before, we do that we have to solve the optimisation problem! 
+Okay great, we've now for all the data structures we need to estimate $W$ (and $V$). We have $Z_1$, $Z_0$, $X_1$ and $X_0$. We also have the matrices to calculate the counterfactual. But before, we do that we have to solve the optimisation problem! 
 
+From above it means solving this equation ... 
 
-```{r alt optimisation}
-# some arguements that are helpful to set up at the start
-optimxmethod <- c("Nelder-Mead","BFGS")
-# quadopt <-  "ipop"
-# Margin.ipop <- 0.0005
-# Sigf.ipop <- 5
-# Bound.ipop <-  10
-all.methods <- FALSE
-# The first thing we do is normalise X by the variance - this returns some scaled matrices to us (scaled by variance of each predictor)
-nvarsV <- dim(X0)[1]
-big.dataframe <- cbind(X0, X1)
-divisor <- sqrt(apply(big.dataframe, 1, var))
-
-scaled.matrix <- t(t(big.dataframe) %*% ( 1/(divisor) * diag(rep(dim(big.dataframe)[1], 1)) )) # last bit is the identify matrix such that it becomes the variance matrix once multiplied by variance estimates
-
-X0.scaled <- scaled.matrix[, 1:ncol(X0), drop = FALSE]
-X1.scaled <- scaled.matrix[, ncol(scaled.matrix)]
-
+```{r function to optimise}
 # function to optimise
 # So, let's explore how we can solve the optimisation problem. 
 fn.V <- function (variables.v = stop("variables.v missing"), 
@@ -500,6 +507,34 @@ fn.V <- function (variables.v = stop("variables.v missing"),
   return(invisible(loss.v))
 }
 
+```
+
+
+## Optimisation and estimation
+
+Now that we've got the function set up ... let's exlpore it's application
+
+
+```{r alt optimisation}
+# some arguements that are helpful to set up at the start
+# optimxmethod <- c("Nelder-Mead","BFGS")
+# quadopt <-  "ipop"
+# Margin.ipop <- 0.0005
+# Sigf.ipop <- 5
+# Bound.ipop <-  10
+# all.methods <- FALSE
+
+# The first thing we do is normalise X by the variance - this returns some scaled matrices to us (scaled by variance of each predictor)
+nvarsV <- dim(X0)[1]
+big.dataframe <- cbind(X0, X1)
+divisor <- sqrt(apply(big.dataframe, 1, var))
+
+scaled.matrix <- t(t(big.dataframe) %*% ( 1/(divisor) * diag(rep(dim(big.dataframe)[1], 1)) )) # last bit is the identify matrix such that it becomes the variance matrix once multiplied by variance estimates
+
+X0.scaled <- scaled.matrix[, 1:ncol(X0), drop = FALSE]
+X1.scaled <- scaled.matrix[, ncol(scaled.matrix)]
+
+
 
 # okay now we can set up the optimsiation problem
 ## the package gives the option to use `genoud` but we won't go into that
@@ -510,15 +545,15 @@ SV1 <- rep(1/nvarsV,nvarsV)
 # now we can estimate the parameters
 opt_res <- optimx::optimx(par=SV1, # initial guesses
                   fn=fn.V, # function
-                  gr=NULL, # gradient not provided
-                  hess=NULL, # donhessian not procided
-                  method=optimxmethod,
-                  itnmax=NULL, # no max iterations
-                  hessian=FALSE, # don't return hessian
-                  control=list(kkt=FALSE,
-                               starttests=FALSE,
-                               dowarn=FALSE,
-                               all.methods=all.methods),
+                  # gr=NULL, # gradient not provided
+                  # hess=NULL, # donhessian not procided
+                  method=c("Nelder-Mead","BFGS"),
+                  # itnmax=NULL, # no max iterations
+                  # hessian=FALSE, # don't return hessian
+                  # control=list(kkt=FALSE,
+                  #              starttests=FALSE,
+                  #              dowarn=FALSE,
+                  #              all.methods=FALSE),
                   X0.scaled = X0.scaled,
                   X1.scaled = X1.scaled,
                   Z0 = Z0,
@@ -595,9 +630,9 @@ colnames(tab.v) <- c("v.weights")
 
 # plot output
 data_plot2 <-  data.table(year = 1960:2005,
-           co2_actual = Y1plot,
-           co2_synth = Y0plot %*% solution.w,
-           effects = Y1plot - (Y0plot %*% solution.w))
+                          co2_actual = Y1plot,
+                          co2_synth = Y0plot %*% solution.w,
+                          effects = Y1plot - (Y0plot %*% solution.w))
 
 names(data_plot2) <-  c("year", "co2_actual", "co2_synth", "effects")
 
@@ -613,8 +648,12 @@ data_plot2 %>%
   theme(legend.position = "top")+
   geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
 ```
+Okay great, we've recreated the main analysis we saw from the simple application above! 
 
+Now that we've explored what's going on under the hood, I am thankful you can just call `Synth()` instead of having to code this up everytime. I hope you are too!
 
-Now that we've explored what's going on under the hood, be thankful you can just call `Synth()` instead of having to code this up everytime! 
+Big thanks to the author(s) for writing up this amazing package :) and I hope this was a helpful little primer. 
 
-Big thanks to the author(s) for writing up this amazing package :)
+For more I really recommend this explanation for a general and practical intro (plus it's in python which is cool): https://matheusfacure.github.io/python-causality-handbook/15-Synthetic-Control.html. 
+
+I also recommend this paper that explores the practical applications of synthetic control in a more academic style: https://par.nsf.gov/servlets/purl/10331930. 
