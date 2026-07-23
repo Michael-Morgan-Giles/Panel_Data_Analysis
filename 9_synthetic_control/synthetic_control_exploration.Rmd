@@ -59,13 +59,11 @@ a:hover {
 
 # Introduction
 
-One really interesting estimator I never went through at university in any real depth was **Synthetic Control**. This is a great shame because it is a really exciting and honestly quite old estimator now *(and when I was studying!)*.
-
-So I thought it might be nice to add a brief *(yet quite in depth)* exploration of this estimator! 
+One really interesting estimator I never went through at university in any real depth was **Synthetic Control**. This is a great shame because it is a really exciting and honestly quite old estimator now *(and when I was studying!)*. So I thought it might be nice to add a brief *(yet quite in depth)* exploration of this estimator. 
 
 The most commonly used package in `R` is the `Synth` package by *Jens Hainmueller and co: Jens Hainmueller aut cre, Alexis Diamond aut, Alberto Abadie aut (2011). “Synth: An R Package for Synthetic Control Methods in Comparative Case Studies.” _Journal of Statistical Software_, 42(13), 1-17. <https://www.jstatsoft.org/v42/i13/>*.
 
-The package is really simple to use and generally robust for most quasi-experimental panel data applications. So let's explore what the Synthetic Control esitmator is, a neat application of it and then a bit of a peak under the hood as to what is going on in the `Synth()` function. 
+The package is really simple to use and generally robust for most quasi-experimental panel data applications. So let's explore what the Synthetic Control (SC) estimator is, a neat application of it and then a bit of a peak under the hood as to what is going on in the `Synth()` function. 
 
 ```{r setup, message=FALSE}
 library(data.table)
@@ -83,24 +81,16 @@ options(scipen = 999)
 
 ... summarise high level ... 
 
+
+
+
 # Synthetic Control Example
 
 To explore the estimator I will use the famous example from the paper: *Andersson, J.J., 2019. Carbon taxes and CO2 emissions: Sweden as a case study. American Economic Journal: Economic Policy, 11(4), pp.1-30*.
 
-The paper exploits a natural experiment to estimate the effect a carbon tax has on Co2 emissions. In 1990, Sweden was the first country in the world to implement a carbon tax. Because they were the first to implement a carbon tax, they can be compared against other "similar" units to estimate an effect on emissions. You might be thinking of applying a difference-in-differences estimator in a scenario like this and you wouldn't be the first to think that. Unfortunately, the dreaded parallel trends assumption for DiD has raised it's head again in this scenario such that the estimator is potentially biased. 
+The paper exploits a natural experiment to estimate the effect a carbon tax has on Co2 emissions. In 1990, Sweden was the first country in the world to implement a carbon tax. Because they were the first to implement a carbon tax, Sweden's emissions can be compared against other "similar" countries to estimate the effect the carbon tax had emissions. You might be thinking of applying a difference-in-differences estimator in a scenario like this and you wouldn't be the first to think that. Unfortunately, the dreaded parallel trends assumption for DiD has raised it's head again. Investigating the trends visually shows that a DiD estimator is potentially biased. 
 
-This is where the "synthetic control" comes in because it can relax the parallel trends assumption. Because the synthetic control estimator creates weights that take just the "best" parts of all the control units to compare against the treated units outcome variable, the parallel trends assumption is not necessary (dependant on the pre-intervention fit). 
-
-
-So basically, this study utilised this natural experiment to construct a “synthetic version” of Sweden, that never implemented a carbon tax. This allows a comparison of emissions between “synthetic” Sweden that never implemented a carbon tax, and “actual” Sweden that did implement a carbon tax in 1990. If the fit is good, well then in theory the differences between "actual" and "synthetic" Sweden should be entirely because of the carbon tax, and not some other unobserved factor. In short it would be a causal effect. 
-
-This is why SC has become such a popular esitmator such that it has been labelled by Susan Athey &  Guido W. Imbens as “the most important innovation in the policy evaluation literature in the last few years”, https://www.aeaweb.org/articles?id=10.1257/jep.31.2.3.
-
-So enough blabbering about the estimator, let's take a look at its application using `Synth`.
-
-
-```{r simple example}
-
+```{r data and parallel trends, warning=FALSE, message=FALSE}
 co2 <- setDT(read_dta("/home/michael/Projects/essays/swedish_cp_replication/carbontax_fullsample_data.dta"))
 
 #select countries and filter for years
@@ -128,6 +118,39 @@ co2_clean[, Countryno := .GRP, by = .(country)]
 # clean up environment
 rm(co2)
 
+## parallel trends graph
+co2_clean %>% 
+  mutate(treatment = fifelse(Countryno == 13, TRUE, FALSE)) %>% 
+  group_by(year, treatment) %>% 
+  summarise(mean_emissions = mean(CO2_transport_capita)) %>% 
+  ggplot(aes(x = year, y = mean_emissions, color = treatment))+
+  geom_line()+
+  theme_classic()+
+  theme(legend.position = "blank")+
+  labs(title = "Parallel Trends Investigation", 
+       y = "Mean Co2 Emissions Per Capita",
+       x = "year")+
+  geom_vline(xintercept = as.double(1990), color = "black", type = "--")+
+  geom_smooth(method = "lm", 
+              data = co2_clean %>% filter((year <= 1990)) %>%
+                mutate(treatment = fifelse(Countryno == 13, TRUE, FALSE)) %>%
+                group_by(year, treatment) %>%
+                summarise(mean_emissions = mean(CO2_transport_capita)), 
+              se = FALSE)
+```
+
+
+This is where the "synthetic control" comes in because it can relax the parallel trends assumption. Because the SC estimator creates weights that take just the "best" parts of all the control units to compare against the treated units outcome variable, the parallel trends assumption is not necessary *(dependent on the pre-intervention fit)*. 
+
+So basically, this study utilised this natural experiment of Sweden being the only country to implement a carbon tax to construct a “synthetic version” of Sweden, that never implemented a carbon tax. This allows a comparison of emissions between “synthetic” Sweden that never implemented a carbon tax, and “actual” Sweden that did implement a carbon tax in 1990. If the fit is good, well then in theory the differences between "actual" and "synthetic" Sweden should be entirely because of the carbon tax, and not some other unobserved factor. In short it would be a causal effect. 
+
+This is why SC has become such a popular estimator such that it has been labelled by Susan Athey & Guido W. Imbens as *“the most important innovation in the policy evaluation literature in the last few years”*, https://www.aeaweb.org/articles?id=10.1257/jep.31.2.3.
+
+So enough blabbering about the estimator, let's take a look at its application using `Synth`.
+
+
+```{r data prep object}
+
 # data prep object - we will explore all this intense looking stuff in depth later :)
 D <- dataprep(foo = co2_clean,
               predictors = c("GDP_per_capita", 
@@ -150,12 +173,19 @@ D <- dataprep(foo = co2_clean,
               time.optimize.ssr = 1960:1989,
               time.plot = 1960:2005)
 
+```
+
+```{r synth model run}
+
 # this is the wrapper function that calculates all the nice stuff for our synthetic control weights
-synth_out <- synth(data.prep.obj = D, method = 'L-BFGS-B')
+synth_out <- synth(data.prep.obj = D, method = 'L-BFGS-B',  verbose = TRUE)
 
 # fitted weight vectors (v for the predictors weights and w for the unit weights)
-synth_out$solution.v
-synth_out$solution.w
+# kableExtra::kable(synth_out$solution.v)
+# kableExtra::kable(synth_out$solution.w)
+```
+
+```{r simple effect counts}
 
 # simple effects calcs
 effects <- D$Y1plot - (D$Y0plot %*% synth_out$solution.w)
@@ -163,7 +193,7 @@ sum(effects[32:length(effects)])
 mean(effects[32:length(effects)])
 
 # percentage changes
-effects_prct <- (D$Y1plot - (D$Y0plot %*% synth_out$solution.w))/2.309894
+effects_prct <- (D$Y1plot - (D$Y0plot %*% synth_out$solution.w))/co2_clean[year == 1990 & Countryno == 13, CO2_transport_capita]
 sum(effects_prct[32:length(effects)])
 mean(effects_prct[32:length(effects)])
 
@@ -171,14 +201,18 @@ mean(effects_prct[32:length(effects)])
 synth_tables <- synth.tab(dataprep.res = D, synth.res = synth_out)
 
 ## table for weights w
-synth_tables$tab.w
+kableExtra::kable(synth_tables$tab.w)
 
 ## special predictors (X matrices)
-synth_tables$tab.pred
-synth_tables$tab.v
+kableExtra::kable(synth_tables$tab.pred)
+kableExtra::kable(synth_tables$tab.v)
 
+```
+
+
+```{r estimate plots}
 # plots from ggplot
-## path plot
+## plot data
 data_plot <- data.table(year = 1960:2005,
                         co2_actual = D$Y1plot,
                         co2_synth = D$Y0plot %*% synth_out$solution.w,
@@ -186,6 +220,7 @@ data_plot <- data.table(year = 1960:2005,
 
 names(data_plot) <-  c("year", "co2_actual", "co2_synth", "effects")
 
+## path plot
 data_plot %>% 
   ggplot(aes(x = year)) +
   geom_line(aes(y = co2_actual, color = "Actual")) +
@@ -210,8 +245,10 @@ data_plot %>%
   theme(legend.position = "top")+
   geom_hline(yintercept = 0, linetype = 'dashed', color = "black")+
   geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
+```
 
 
+```{r placebo}
 # placebo test for loop
 ## initialise data
 store <- matrix(NA,length(1960:2005),15)
@@ -261,7 +298,7 @@ gap.end.pre  <- which(rownames(data)=="1989")
 #  MSPE Pre-Treatment
 mse  <- apply(data[ gap.start:gap.end.pre,]^2,2,mean)
 sweden.mse <- as.numeric(mse[13])
-# Exclude MSPE > 20 
+# Exclude MSPE > 20 (really bad fits)
 data <- data[,mse<20*sweden.mse]
 Cex.set <- 1
 
@@ -291,6 +328,10 @@ data_long %>%
   annotate("segment", x = 1987, xend = 1989, y = -0.5, yend = -0.5, color = "black", arrow = arrow(length = unit(0.1, "inches"))) +
   guides(color = guide_legend(override.aes = list(linetype = c(1, 1), color = c("black", "gray"), size = c(1, 0.5))))
 
+```
+
+
+```{r sparsity of weights}
 # Create a data frame for the weights
 data.frame(country = synth_tables$tab.w$unit.names,
            Weight = synth_tables$tab.w$w.weights) %>% 
@@ -302,13 +343,17 @@ data.frame(country = synth_tables$tab.w$unit.names,
   theme_classic()+
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 
-rm(list=setdiff(ls(), "co2_clean"))
-
 ```
+
+```{r clean up environ, echo=FALSE}
+rm(list=setdiff(ls(), "co2_clean"))
+invisible(gc())
+```
+
 
 # A deep dive into Synthetic Control
 
-Now that we've seen a simple application using `Synth` and the sort of results you can produce with it, lets dig into the code a bit deeper to get a better idea at what is going on underneath the hood! 
+Now that we've seen an application using `Synth` and the sort of results you can produce with it, lets dig into the code a bit deeper to get a better idea at what is going on underneath the hood! 
 
 ## data transformations
 
@@ -320,6 +365,14 @@ So, I thought it would be helpful to illustrate what this function is actually d
 
 Firstly, let's look some of the inputs in the `dataprep` object and what they do:
 - `foo` is the data.frame or table your data is stored in. In the above example this is the `co2_data`. 
+- `predictors`
+- `predictors.op`
+- `special.predictors`
+- `unit.variable`
+- `unit.names.variable`
+- `time.variable`
+
+For our purposes, the key arguements we need for explore the transformations are ...
 
 ```{r parameters}
 # below are the key arguments used in estimating the synthetic control weights for the data prep object
@@ -327,31 +380,36 @@ Firstly, let's look some of the inputs in the `dataprep` object and what they do
 # data prep objects parameters
 
 # these are the predictors that form (part of the) X matrices used in the optimisation problem. This is a list of the column names as strings
-predictors <-  c("GDP_per_capita", "gas_cons_capita", "vehicles_capita", "urban_pop") 
+# predictors <-  c("GDP_per_capita", "gas_cons_capita", "vehicles_capita", "urban_pop") 
 
-predictors.op <-  "mean" # the operation applie to the treated X matrix (i.e. mean or median etc - mean is usually sufficient) 
+# predictors.op <-  "mean" # the operation applie to the treated X matrix (i.e. mean or median etc - mean is usually sufficient) 
 
 # these are the (special) predictors that form (part of the) X matrices used in the optimisation problem. This is a list of a list of the lags for the output variable we want to include.
-special.predictors <-  list( 
-                  list("CO2_transport_capita" , 1989 , "mean"),
-                  list("CO2_transport_capita" , 1980 , "mean"),
-                  list("CO2_transport_capita" , 1970 , "mean")
-              ) 
+# special.predictors <-  list( 
+#                   list("CO2_transport_capita" , 1989 , "mean"),
+#                   list("CO2_transport_capita" , 1980 , "mean"),
+#                   list("CO2_transport_capita" , 1970 , "mean")
+#               ) 
 
-# this is the variable of interest
-dependent <-  "CO2_transport_capita"
+
 
 # this is the column name identifying the unit dimension i.e. countries numebrs "Countryno"
 # the code turns this into a column position index, so we can skip that part and just get set it as the first column 
-unit.variable <-  1
+# unit.variable <-  1
 
 # unit varibale names is the names we want to include in the final outputs i.e. the countries actual names and not just an index number
 # the code also turns this into a column position index, so we can skip that part and just get set it as the 2nd column (country)
-unit.names.variable <-  2
+# unit.names.variable <-  2
 
 # the column that his the time dimension in our panel
 # Similarly, the code turns this into a column position index, so we can skip that part and just get set it as the 3 column (year)
-time.variable <-  3
+# time.variable <-  3
+
+
+#######################################
+
+# this is the variable of interest
+dependent <-  "CO2_transport_capita"
 
 # this is a arguement that identifies which of the `unit.variable` is the treated unit. For out case it is unit 13
 treatment.identifier  <- 13
@@ -369,22 +427,15 @@ time.optimize.ssr <-  1960:1989
 # if nothing is provided, this will default to `time.optimize.ssr`. But in our case we will set this to the whole period.
 time.plot <-  1960:2005
 
-
-
 ```
 
 Now that we've set up all the key arguments, let's explore the actual transformations.
 
-Firstly let's look at the $X_i$ matrices. From above, we know that these matrices basically contain variables (`predictors`) that help fit the weights we want to estimate. $X_1$ is the mean of all the treated units predictors (plus some lags in our example - contained in the `special.predictors` argument). $X_0$  is the same but for the control units. 
+Firstly let's look at the $X_i$ matrices. These matrices basically contain variables (`predictors`) that help fit the weights we want to estimate. $X_1$ is the mean of all the treated units predictors (plus some lags in our example - contained in the `special.predictors` argument). $X_0$  is the same but for the control units. 
 
 Note that to make sure the dimensions line up, we have to transpose these tables such that the columns relate to the units.
 
-
-Secondly, the $Z_i$ matrices contain the outcome variable over the period we want to optimise (pre-intervention period denote by the `time.optimize.ssr` argument). The transformations for this again are quite simple such that we basically just cast the unit row to the columns such that we get a matrix with $T$ rows and $n$ columns. All the elements in this matrix are for the outcome variable (the `dependent` argument). Obviously we complete these transformations separately for the treated and control units.
-
-Another helpful object the `dataprep()` function returns is the `Y1plot` and `Y0plot` dataframes. The transformations for these are exactly the same as the $Z_i$ matrices, however we now include all the time periods (pre- and post-intervention - set by the `time.plot` but we don't have to make any filters). This becomes helpful when constructing the counterfactual because the `synth_cf = w.solution %*% Y0plot` that can be easily compared to `Y1plot` to estimate the effect. 
-
-```{r alt transformations}
+```{r X matrices}
 # X0
 X0 <- t(co2_clean[Countryno != treatment.identifier & year %in% time.predictors.prior, 
           .(GDP_per_capita = mean(GDP_per_capita, na.rm = TRUE),
@@ -400,6 +451,9 @@ X0 <- t(co2_clean[Countryno != treatment.identifier & year %in% time.predictors.
 X0 <- rbind(X0, special.CO2_transport_capita.1970 = co2_clean[Countryno != treatment.identifier,CO2_transport_capita[year == 1970]])
 # add columnn names
 colnames(X0) <- controls.identifier
+
+# just five columns
+kableExtra::kable(X0[,1:5])
 
 # X1
 X1 <- t(co2_clean[Countryno == treatment.identifier & year %in% time.predictors.prior, 
@@ -417,12 +471,21 @@ X1 <- rbind(X1, special.CO2_transport_capita.1970 = co2_clean[Countryno == treat
 # add columnn names
 colnames(X1) <- treatment.identifier
 
+kableExtra::kable(X1)
+```
+
+Secondly, the $Z_i$ matrices contain the outcome variable over the period we want to optimise (pre-intervention period denoted by the `time.optimize.ssr` argument). The transformations for this again are quite simple such that we basically just cast the unit row to the columns such that we get a matrix with $T$ rows and $n$ columns. All the elements in this matrix are for the outcome variable (the `dependent` argument). Obviously, we complete these transformations separately for the treated and control units.
+
+```{r Z matrices}
 # Z0
 Z0 <- dcast(co2_clean[Countryno != treatment.identifier & year %in% time.optimize.ssr,  
                       .(Countryno, year, CO2_transport_capita)], 
             year ~ Countryno, value.var = dependent) %>% select(-year) %>% as.matrix()
 
 rownames(Z0) <- time.optimize.ssr
+
+# print just five columns and five rows
+kableExtra::kable(Z0[1:5, 1:5])
 
 # Z1
 Z1 <- dcast(co2_clean[Countryno == treatment.identifier & year %in% time.optimize.ssr,  
@@ -431,6 +494,15 @@ Z1 <- dcast(co2_clean[Countryno == treatment.identifier & year %in% time.optimiz
 
 rownames(Z1) <- time.optimize.ssr
 
+# just five rows
+kableExtra::kable(Z1[1:5])
+
+```
+
+
+Another helpful object the `dataprep()` function returns is the `Y1plot` and `Y0plot` dataframes. The transformations for these are exactly the same as the $Z_i$ matrices, however we now include all the time periods (pre- and post-intervention - set by the `time.plot` arguement, but we don't need to make any filters because the arguement is set to all the years). This becomes helpful when constructing the counterfactual because the `synth_cf = w.solution %*% Y0plot` that can be easily compared to `Y1plot` to estimate the effect i.e. `effect = Y1plot - synth_cf`. 
+
+```{r Y plots and unit names}
 # plots 
 # Y0plot
 Y0plot <- dcast(co2_clean[Countryno != treatment.identifier,  
@@ -438,6 +510,8 @@ Y0plot <- dcast(co2_clean[Countryno != treatment.identifier,
             year ~ Countryno, value.var = dependent) %>% select(-year) %>% as.matrix()
 
 rownames(Y0plot) <- time.plot
+
+# kableExtra::kable(Y0plot)
 
 # Y1plot
 Y1plot <- dcast(co2_clean[Countryno == treatment.identifier,  
@@ -450,23 +524,81 @@ rownames(Y1plot) <- time.plot
 names.and.numbers <- data.frame(c(co2_clean[Countryno ==treatment.identifier, unique(country)],co2_clean[Countryno !=treatment.identifier, unique(country)]), 
                                 c(co2_clean[Countryno ==treatment.identifier, unique(Countryno)],co2_clean[Countryno !=treatment.identifier, unique(Countryno)]))
 names(names.and.numbers) <- c("unit.names", "unit.numbers")
+
+# kableExtra::kable(Y1plot)
 ```
 
+There are a lot more checks and balances in the actual source code to make sure you can't *(or don't)* mess anything up when you set up the `dataprep` object. But for our purposes of exploration, the above transformations show what the underlying source code achieves. So it will suffice for now :)
 
-## Loss function
+## Loss Function
 
-There are a lot more checks and balances in the actual source code to make sure you can't (or don't) mess anything up when you set up the `dataprep` object. But for our purposes of exploration, the above transformations show what the underlying source code achieves. So it will suffice for now :)
+Okay great, we've now for all the data structures we need to estimate $W$ *(and $V$)*. We have $Z_1$, $Z_0$, $X_1$ and $X_0$. We also have the matrices to calculate the counterfactual. But before, we do that we have to solve the optimisation problem! From the brief introduction above it means solving this optimistion problem for $W$:
 
-## Optimisation Problem
+$$
+W^* \operatorname{argmin_w} \quad (X_1 - WX_0)'V(X_1 - WX_0)) \\
 
-Okay great, we've now for all the data structures we need to estimate $W$ (and $V$). We have $Z_1$, $Z_0$, $X_1$ and $X_0$. We also have the matrices to calculate the counterfactual. But before, we do that we have to solve the optimisation problem! 
+s.t \quad W \geq 0, \quad \iota'W = 1
+$$
 
-From above it means solving this equation ... 
+Basically, this is an optimisation problem subject to "convexity" constraints i.e. all elements in $W \geq 1$ and sum up to one. $W$ contains all the weights for each control unit that we will use to estimate the counterfactual *(the weighted average of all control units outcome variables)*. But $V$ is another weighting matrix that determines the relative importance of the predictors in $X_i$ when choosing $W$ *(note that $V$ will be a positive semi-definite  matrix with elements across the diagonal)*. There is a special way to fit this that minimises the mean squared prediction error (MSPE) that the `Synth` package adopts *(we'll explore that in a second)*. 
+
+Now this might seem like quite a challenging optimisation problem, and in a way it is. But, this problem can be reformulated into a typically quadratic optimisation problem. Let's explore how by first expanding and then rearranging the above loss function:
+
+$$
+(X_1 - WX_0)'V(X_1 - WX_0)) = X_1'VX_1 -  X_1'VWX_0 - W'X_0'VX_1 + W'X_0'VWX_0 \\
+
+=  W'(X_0'VX_0)W - 2(X_0'VX_1)W' + X_1'VX_1 
+$$
+
+Now this probably looks just as confusing, however the above can be fit quite nicely into the standard quadratic optimisation problem: 
+
+$$ 
+\frac{1}{2} W'HW + c'W
+$$
+
+We can match the above notation to this general quadratic problem by setting the quadratic term to $H$ as such:
+
+$$
+W'(X_0'VX_0)W = \frac{1}{2}W'HW \\
+
+\Rightarrow (X_0'VX_0) = \frac{1}{2}H
+$$
+
+We can do a similar matching to $c$ as such:
+
+$$
+c'W = - 2(X_0'VX_1)W' \\
+
+\Rightarrow c = - 2(X_0'VX_1)
+$$
+
+When we put all this together we can see that:
+
+$$
+\frac{1}{2} W'HW + c'W = W'(X_0'VX_0)W - 2(X_0'VX_1)
+$$
+
+Note that the constant term $X_1'VX_1$ will fall off in the optimisation problem once we take the derivative with respect to $W$. So we can basically ignore it.
+
+Now this took me an unreasonably long amount of time to decipher so I might *(still)* have some of that wrong. But, for more on quadratic programming the wiki is a good start: https://en.wikipedia.org/wiki/Quadratic_programming. But the `Synth` package uses the `ipop` function from the `kernlab` package which has a similar functional form to the above to solve for $W$ *(with some nuances)*: https://www.rdocumentation.org/packages/kernlab/versions/0.9-29/topics/ipop. 
+
+Now before we can actually solve for $W$, we first need to choose the $V$ to input into the above equation. There are quite a few ways to do this but the `Synth` function uses a fancy data driven method to choose $V$. By minimsing the below function we get an optimised $V^*$ to be used in the optimisation problem for $W$. It's basically just a nested function that chooses $V$ that minimises the mean square prediction error of the pre-intervention periods we set up earlier i.e. $Z_1$ and $Z_0$. Specifically, it minimises:
+
+$$ 
+\operatorname{argmin_V}(Z_1 - Z_0W(V))'(Z_1 - Z_0W(V))
+$$
+
+
+Below is a simplified version of the function from the `Synth` package itself *(note the comments I've left to explain my interpretation of how they fit together with what is outlined above)*. 
 
 ```{r function to optimise}
+
+## to view the full function used in the package run the code below
+# view(Synth::fn.V)
+
 # function to optimise
 # So, let's explore how we can solve the optimisation problem. 
-fn.V <- function (variables.v = stop("variables.v missing"), 
+V_MSPE <- function (variables.v = stop("variables.v missing"), 
                   X0.scaled = stop("X0.scaled missing"),
                   X1.scaled = stop("X1.scaled missing"), 
                   Z0 = stop("Z0 missing"),
@@ -477,16 +609,18 @@ fn.V <- function (variables.v = stop("variables.v missing"),
                   #quadopt = "ipop"
                   ){
   
-  V <- diag(x = as.numeric(abs(variables.v)/sum(abs(variables.v))), nrow = length(variables.v), ncol = length(variables.v))
-  H <- t(X0.scaled) %*% V %*% (X0.scaled)
-  a <- X1.scaled
-  c <- -1 * c(t(a) %*% V %*% (X0.scaled))
-  A <- t(rep(1, length(c)))
-  b <- 1
-  l <- rep(0, length(c))
-  u <- rep(1, length(c))
-  r <- 0
+  # this is the definition of the V matrix
+  V <- diag(x = as.numeric(abs(variables.v)/sum(abs(variables.v))), nrow = length(variables.v), ncol = length(variables.v)) 
+  H <- t(X0.scaled) %*% V %*% (X0.scaled) # H matrix set to X_0'VX_0 as above (1/2 removed)
+  a <- X1.scaled # This helps define the dimensions for c
+  c <- -1 * c(t(a) %*% V %*% (X0.scaled)) # note that this is -1 instead of -2 because the H is multiplied by 1/2 (this exploded my head a bit but it works out once you take the derivatives)
+  A <- t(rep(1, length(c)))  # by setting A to the identity vector this sets the condition to ensure W sums to one (r = 0, therefore b + r = 1)
+  b <- 1 # sets upper limit on sum of W
+  l <- rep(0, length(c)) # sets the lower bound for each element of W as 0
+  u <- rep(1, length(c)) # sets the upper bound for each element of W as 1
+  r <- 0 # ensures b + r = 1
   
+  # have to solve for W to get the loss for V (we don't use this )
   res <- ipop(c = c, 
               H = H, 
               A = A, 
@@ -499,23 +633,23 @@ fn.V <- function (variables.v = stop("variables.v missing"),
               maxiter = 1000, 
               sigf = sigf.ipop)
   
-  solution.w <- as.matrix(primal(res))
+  solution.w <- as.matrix(primal(res)) # returns solution for W
 
-  loss.w <- as.numeric(t(X1.scaled - X0.scaled %*% solution.w) %*% (V) %*% (X1.scaled - X0.scaled %*% solution.w))
+  # loss.w <- as.numeric(t(X1.scaled - X0.scaled %*% solution.w) %*% (V) %*% (X1.scaled - X0.scaled %*% solution.w))
   loss.v <- as.numeric(t(Z1 - Z0 %*% solution.w) %*% (Z1 -Z0 %*% solution.w))
-  loss.v <- loss.v/nrow(Z0)
+  loss.v <- loss.v/nrow(Z0) # this is the MSPE
   return(invisible(loss.v))
 }
 
 ```
 
+## Estimation
 
-## Optimisation and estimation
+Okay now that we've explore the loss function, let's actually use it to estimate the weights! 
 
-Now that we've got the function set up ... let's exlpore it's application
+The first thing the `Synth()` function does it normalised the matrices $X_i$ by the standard deviation:
 
-
-```{r alt optimisation}
+```{r ooptimisation}
 # some arguements that are helpful to set up at the start
 # optimxmethod <- c("Nelder-Mead","BFGS")
 # quadopt <-  "ipop"
@@ -524,17 +658,16 @@ Now that we've got the function set up ... let's exlpore it's application
 # Bound.ipop <-  10
 # all.methods <- FALSE
 
-# The first thing we do is normalise X by the variance - this returns some scaled matrices to us (scaled by variance of each predictor)
+# The first thing we do is normalise X by the standard deviation - this returns some scaled matrices to us (scaled by standard deviation of each predictor)
 nvarsV <- dim(X0)[1]
 big.dataframe <- cbind(X0, X1)
 divisor <- sqrt(apply(big.dataframe, 1, var))
 
 scaled.matrix <- t(t(big.dataframe) %*% ( 1/(divisor) * diag(rep(dim(big.dataframe)[1], 1)) )) # last bit is the identify matrix such that it becomes the variance matrix once multiplied by variance estimates
 
+# split the variances back out into X_1 and X_0
 X0.scaled <- scaled.matrix[, 1:ncol(X0), drop = FALSE]
 X1.scaled <- scaled.matrix[, ncol(scaled.matrix)]
-
-
 
 # okay now we can set up the optimsiation problem
 ## the package gives the option to use `genoud` but we won't go into that
@@ -544,7 +677,7 @@ SV1 <- rep(1/nvarsV,nvarsV)
 
 # now we can estimate the parameters
 opt_res <- optimx::optimx(par=SV1, # initial guesses
-                  fn=fn.V, # function
+                  fn=V_MSPE, # V MSPE function
                   # gr=NULL, # gradient not provided
                   # hess=NULL, # donhessian not procided
                   method=c("Nelder-Mead","BFGS"),
@@ -570,22 +703,22 @@ opt_res <- optimx::optimx(par=SV1, # initial guesses
 
 opt_res <- collect.optimx(opt_res,"min")
 
-solution.v   <- abs(opt_res$par)/sum(abs(opt_res$par))
+solution.v  <- abs(opt_res$par)/sum(abs(opt_res$par))
 
 # great now that we have the solution for V* we can recover W(V*):
 
-V <- diag(x=as.numeric(solution.v),nrow=nvarsV,ncol=nvarsV) # solution for V act as weights
+# below is functionally the same code as the function we explored above, but now we have V
+V <- diag(x=as.numeric(solution.v),nrow=nvarsV,ncol=nvarsV) # solution from optimisation problem above acts as our V
 H <- t(X0.scaled) %*% V %*% (X0.scaled) 
 a <- X1.scaled 
-c <- -1*c(t(a) %*% V %*% (X0.scaled) ) # vector appearing in quadratic function
-A <- t(rep(1, length(c))) # defines constaints for quadratic optimisation
-b <- 1 # optimised vector constraint (upper)
-l <- rep(0, length(c)) # lwoer bound
-u <- rep(1, length(c)) # upper bound
-r <- 0 # optimised vector constraint (lower)  
+c <- -1*c(t(a) %*% V %*% (X0.scaled) ) 
+A <- t(rep(1, length(c))) 
+b <- 1 
+l <- rep(0, length(c)) 
+u <- rep(1, length(c)) 
+r <- 0  
 
-# https://www.rdocumentation.org/packages/kernlab/versions/0.9-29/topics/ipop
-# https://en.wikipedia.org/wiki/Quadratic_programming
+# optimisation problem solving for W
 quad_res <- kernlab::ipop(c = c, 
             H = H, 
             A = A, 
@@ -609,10 +742,13 @@ names(solution.v) <- rownames(X0)
 loss.w <- t(X1.scaled - X0.scaled %*% solution.w) %*% V %*% (X1.scaled - X0.scaled %*% solution.w)
 loss.v <- t(Z1 - Z0 %*% as.matrix(solution.w)) %*% (Z1 - Z0 %*% as.matrix(solution.w)) /nrow(Z0)      
 
+```
+
+```{r results}
 # now we have the optimised solutions for W(V)
 # table for W
-data.frame(round(solution.w,4),
-           names.and.numbers[-which(names.and.numbers[,2]==treatment.identifier),])
+kableExtra::kable(data.frame(round(solution.w,4),
+           names.and.numbers[-which(names.and.numbers[,2]==treatment.identifier),]))
 
 # predictor comparisons
 tab.pred <- round(cbind(X1,
@@ -621,12 +757,14 @@ tab.pred <- round(cbind(X1,
                           
 colnames(tab.pred) <- c("Treated", "Synthetic", "Sample Mean")
 
-tab.pred
+kableExtra::kable(tab.pred)
 
-# table for V
+# table for V matrix (diag)
 tab.v <- matrix(round(solution.v, 4), nrow=length(solution.v))
 rownames(tab.v) <- rownames(X1)
 colnames(tab.v) <- c("v.weights")
+
+kableExtra::kable(tab.v)
 
 # plot output
 data_plot2 <-  data.table(year = 1960:2005,
@@ -648,6 +786,7 @@ data_plot2 %>%
   theme(legend.position = "top")+
   geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
 ```
+
 Okay great, we've recreated the main analysis we saw from the simple application above! 
 
 Now that we've explored what's going on under the hood, I am thankful you can just call `Synth()` instead of having to code this up everytime. I hope you are too!
