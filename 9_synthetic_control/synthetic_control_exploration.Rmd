@@ -79,10 +79,26 @@ options(scipen = 999)
 
 # Synthetic Control Summary
 
-... summarise high level ... 
+The basic idea behind the SC is to construct a counterfactual i.e. what would have happened in the absence of of treatment. That is:
 
+$$ CausalEffect = Actual - Counterfactual$$
 
+This is the fundamental problem of causal inference, because we cannot observe the counterfactual. The SC tries to estimate this counterfactual position as the weight average of a control group i.e. a set of similar units that did not experience the same treatment as the treated unit. Slightly more formally, this means the above equation becomes:
 
+$$ \tau_{1t} = Y_{1t} - WY_{0t} $$
+Where both the $Y_{it}$ are the outcome variable of interest for the treated and control units and the $W$ is a vector of weights for each control unit i.e. what percentage of the control units outcome variable should contribute to the counterfactual amount? 
+
+This is a really nice approach because of its simplicity and easy interpretability. This approach can be quite easily explained to someone with very little economic background. Where the complexity arises comes in how to choose the weights in $W$. Specifically, choosing $W$ involves minimising the below optimisation problem:
+
+$$
+W^* \operatorname{argmin_w} \quad (X_1 - WX_0)'V(X_1 - WX_0))
+$$
+
+$$
+s.t \quad W \geq 0, \quad \iota'W = 1
+$$
+
+Now, before we get into the complexities of solving this problem let's explore an example to get a better idea of an application of SC.
 
 # Synthetic Control Example
 
@@ -148,10 +164,10 @@ This is why SC has become such a popular estimator such that it has been labelle
 
 So enough blabbering about the estimator, let's take a look at its application using `Synth`.
 
+The first thing to create is the data output by using the `dataprep()` function *(we will go into a bit more detail behind what this function is doing later)* as such:
+
 
 ```{r data prep object}
-
-# data prep object - we will explore all this intense looking stuff in depth later :)
 D <- dataprep(foo = co2_clean,
               predictors = c("GDP_per_capita", 
                              "gas_cons_capita", 
@@ -175,40 +191,50 @@ D <- dataprep(foo = co2_clean,
 
 ```
 
+This function spits out the necessary transformed data to be feed into the `Synth()` function that chooses the weights $W$:
+
 ```{r synth model run}
 
-# this is the wrapper function that calculates all the nice stuff for our synthetic control weights
-synth_out <- synth(data.prep.obj = D, method = 'L-BFGS-B',  verbose = TRUE)
+synth_out <- synth(data.prep.obj = D,  verbose = TRUE)
 
-# fitted weight vectors (v for the predictors weights and w for the unit weights)
-# kableExtra::kable(synth_out$solution.v)
-# kableExtra::kable(synth_out$solution.w)
 ```
+
+Now that we have $W$ (saved as `synth_out$solution.w` in the output) we can calculate the effects as such:
 
 ```{r simple effect counts}
 
 # simple effects calcs
 effects <- D$Y1plot - (D$Y0plot %*% synth_out$solution.w)
-sum(effects[32:length(effects)])
-mean(effects[32:length(effects)])
+print(paste0("The total post intervention difference in Co2 emissions is: ",sum(effects[32:length(effects)])))
+print(paste0("The mean post intervention difference in Co2 emissions is: ",mean(effects[32:length(effects)])))
+
 
 # percentage changes
 effects_prct <- (D$Y1plot - (D$Y0plot %*% synth_out$solution.w))/co2_clean[year == 1990 & Countryno == 13, CO2_transport_capita]
-sum(effects_prct[32:length(effects)])
-mean(effects_prct[32:length(effects)])
 
+print(paste0("The total percentage change in post intervention difference in Co2 emissions is: ",sum(effects_prct[32:length(effects)])))
+print(paste0("The mean percentage change in post intervention difference in Co2 emissions is: ",mean(effects_prct[32:length(effects)])))
+
+rm(effects_prct)
+```
+
+You can also use the `synth.tab()` function to return the estimates for $W$, the synthetic controls predictors in $X$ and $V$ *(more to come on $V$ later)*:
+
+```{r synth outputs}
 # tables - creates some nice objects for reporting
 synth_tables <- synth.tab(dataprep.res = D, synth.res = synth_out)
 
 ## table for weights w
 kableExtra::kable(synth_tables$tab.w)
 
-## special predictors (X matrices)
+# predictors and V
 kableExtra::kable(synth_tables$tab.pred)
 kableExtra::kable(synth_tables$tab.v)
 
 ```
 
+
+One of the really attractive properties of the SC estimator is it's really easy to visualise the counterfactual against the actual, as well as the gap between the two:
 
 ```{r estimate plots}
 # plots from ggplot
@@ -247,6 +273,10 @@ data_plot %>%
   geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
 ```
 
+
+AS you can see, the pre-intervention fit is quite similar such that they almost certainly have the same trends. This is positive evidence that the effect calculate can be attributed to the carbon tax and not some other unobserved factor. However, in saying that another really simple test to determine the significance of the result is the "placebo" test. 
+
+This involves running each of the control units through the SC estimator as if it was a treated unit. Because they never received the treatment *(a carbon tax)*, we would expect their results to be close to zero *(statistically insignificant)*. We can implement a placebo test as such: 
 
 ```{r placebo}
 # placebo test for loop
@@ -330,6 +360,13 @@ data_long %>%
 
 ```
 
+Note that those units with a mean square error 20 times that of Sweden's mean square error are removed because they have a really poor fit i.e. the model struggles to find a good set of $W$. 
+
+Once those are removed, we can see the estimate for all of the placebo units *(light blue)* against the treated unit *(dark blue)*. We can see the treated unit has the largest effect of all the placebo units, of which most are howevering around zero and don't have the best pre-intervention fit. Some nice evidence to suggest the effect measured for the treated unit is significant. 
+
+There are other tests such as the ratio of MSPE and "in-time placebo" test, but I think this one suffices for this example.
+
+Another property of SC is the sparsity of weights. In the plot below we can see that the choosen $W$ assigns basically all of the weights to only 6 of the 14 possible control units. This is a property of the "convexity" constraint required when estimating $W$. There is some reasearch that suggests this is a potential problem is the number of control units exceeds the number of predictors, and other estimators have been created to try resovle this. But for now, it's just an interesting property for us to note.  
 
 ```{r sparsity of weights}
 # Create a data frame for the weights
@@ -364,49 +401,25 @@ This probably seems like a blackbox that just handily outputs the data we need t
 So, I thought it would be helpful to illustrate what this function is actually doing. 
 
 Firstly, let's look some of the inputs in the `dataprep` object and what they do:
-- `foo` is the data.frame or table your data is stored in. In the above example this is the `co2_data`. 
-- `predictors`
-- `predictors.op`
-- `special.predictors`
-- `unit.variable`
-- `unit.names.variable`
-- `time.variable`
 
-For our purposes, the key arguements we need for explore the transformations are ...
+- `foo` is the data.frame or table your data is stored in. In the above example this is the `co2_data`. 
+- `predictors` are the predictors that form *(part of the $X$ matrices)* used in the optimisation problem. 
+- `predictors.op` is the operation applied to the treated $X$ matrices *(i.e. mean or median etc - mean is usually sufficient)*.
+- `special.predictors` are the *(special)* predictors that form *(part of the $X$ matrices)* used in the optimisation problem. In our example these are a list of a list of the lags for the output variable we want to include.
+- `unit.variable` is the column name identifying the unit dimension i.e. countries numbers or "Countryno" in our case.
+- `unit.names.variable` is the unit variables actual names i.e. the countries actual names and not just an index number in `unit.variable`.
+- `time.variable` is the column that identifies the time dimension in our panel i.e. the year. 
+
+In practice you will have to set most of the above examples plus a few more as outlined in the `dataprep()` function above. However, for our purposes we only need a few of the key arguments to explore the transformations. Noteable we need the:
+
+- `dependent` is the dependent variable of interest i.e. co2 emissions.
+- `treatment.identifier` is an index identifying which unit is the treated  in the `unit.variable` column.
+- `controls.identifier` are indexes identifying which units are the controls in the `unit.variable` column.
+- `time.predictors.prior` is a list identifying the pre-intervention periods over which the special predictors should be averaged.
+- `time.optimize.ssr` is a list identifying the pre-intervention periods over which the loss function is minimised.
+- `time.plot` is a list identifying all time periods. If nothing is provided, this will default to `time.optimize.ssr`. But in our case we will set this to the whole period.
 
 ```{r parameters}
-# below are the key arguments used in estimating the synthetic control weights for the data prep object
-
-# data prep objects parameters
-
-# these are the predictors that form (part of the) X matrices used in the optimisation problem. This is a list of the column names as strings
-# predictors <-  c("GDP_per_capita", "gas_cons_capita", "vehicles_capita", "urban_pop") 
-
-# predictors.op <-  "mean" # the operation applie to the treated X matrix (i.e. mean or median etc - mean is usually sufficient) 
-
-# these are the (special) predictors that form (part of the) X matrices used in the optimisation problem. This is a list of a list of the lags for the output variable we want to include.
-# special.predictors <-  list( 
-#                   list("CO2_transport_capita" , 1989 , "mean"),
-#                   list("CO2_transport_capita" , 1980 , "mean"),
-#                   list("CO2_transport_capita" , 1970 , "mean")
-#               ) 
-
-
-
-# this is the column name identifying the unit dimension i.e. countries numebrs "Countryno"
-# the code turns this into a column position index, so we can skip that part and just get set it as the first column 
-# unit.variable <-  1
-
-# unit varibale names is the names we want to include in the final outputs i.e. the countries actual names and not just an index number
-# the code also turns this into a column position index, so we can skip that part and just get set it as the 2nd column (country)
-# unit.names.variable <-  2
-
-# the column that his the time dimension in our panel
-# Similarly, the code turns this into a column position index, so we can skip that part and just get set it as the 3 column (year)
-# time.variable <-  3
-
-
-#######################################
 
 # this is the variable of interest
 dependent <-  "CO2_transport_capita"
@@ -452,7 +465,7 @@ X0 <- rbind(X0, special.CO2_transport_capita.1970 = co2_clean[Countryno != treat
 # add columnn names
 colnames(X0) <- controls.identifier
 
-# just five columns
+# printing just five columns
 kableExtra::kable(X0[,1:5])
 
 # X1
@@ -525,7 +538,8 @@ names.and.numbers <- data.frame(c(co2_clean[Countryno ==treatment.identifier, un
                                 c(co2_clean[Countryno ==treatment.identifier, unique(Countryno)],co2_clean[Countryno !=treatment.identifier, unique(Countryno)]))
 names(names.and.numbers) <- c("unit.names", "unit.numbers")
 
-# kableExtra::kable(Y1plot)
+# printing names and numbers
+kableExtra::kable(names.and.numbers)
 ```
 
 There are a lot more checks and balances in the actual source code to make sure you can't *(or don't)* mess anything up when you set up the `dataprep` object. But for our purposes of exploration, the above transformations show what the underlying source code achieves. So it will suffice for now :)
@@ -536,7 +550,9 @@ Okay great, we've now for all the data structures we need to estimate $W$ *(and 
 
 $$
 W^* \operatorname{argmin_w} \quad (X_1 - WX_0)'V(X_1 - WX_0)) \\
+$$
 
+$$
 s.t \quad W \geq 0, \quad \iota'W = 1
 $$
 
@@ -545,8 +561,10 @@ Basically, this is an optimisation problem subject to "convexity" constraints i.
 Now this might seem like quite a challenging optimisation problem, and in a way it is. But, this problem can be reformulated into a typically quadratic optimisation problem. Let's explore how by first expanding and then rearranging the above loss function:
 
 $$
-(X_1 - WX_0)'V(X_1 - WX_0)) = X_1'VX_1 -  X_1'VWX_0 - W'X_0'VX_1 + W'X_0'VWX_0 \\
+(X_1 - WX_0)'V(X_1 - WX_0)) = X_1'VX_1 -  X_1'VWX_0 - W'X_0'VX_1 + W'X_0'VWX_0
+$$
 
+$$
 =  W'(X_0'VX_0)W - 2(X_0'VX_1)W' + X_1'VX_1 
 $$
 
@@ -559,17 +577,13 @@ $$
 We can match the above notation to this general quadratic problem by setting the quadratic term to $H$ as such:
 
 $$
-W'(X_0'VX_0)W = \frac{1}{2}W'HW \\
-
-\Rightarrow (X_0'VX_0) = \frac{1}{2}H
+W'(X_0'VX_0)W = \frac{1}{2}W'HW \Rightarrow (X_0'VX_0) = \frac{1}{2}H
 $$
 
 We can do a similar matching to $c$ as such:
 
 $$
-c'W = - 2(X_0'VX_1)W' \\
-
-\Rightarrow c = - 2(X_0'VX_1)
+c'W = - 2(X_0'VX_1)W' \Rightarrow c = - 2(X_0'VX_1)
 $$
 
 When we put all this together we can see that:
@@ -596,8 +610,7 @@ Below is a simplified version of the function from the `Synth` package itself *(
 ## to view the full function used in the package run the code below
 # view(Synth::fn.V)
 
-# function to optimise
-# So, let's explore how we can solve the optimisation problem. 
+# function to optimise for V
 V_MSPE <- function (variables.v = stop("variables.v missing"), 
                   X0.scaled = stop("X0.scaled missing"),
                   X1.scaled = stop("X1.scaled missing"), 
@@ -635,7 +648,6 @@ V_MSPE <- function (variables.v = stop("variables.v missing"),
   
   solution.w <- as.matrix(primal(res)) # returns solution for W
 
-  # loss.w <- as.numeric(t(X1.scaled - X0.scaled %*% solution.w) %*% (V) %*% (X1.scaled - X0.scaled %*% solution.w))
   loss.v <- as.numeric(t(Z1 - Z0 %*% solution.w) %*% (Z1 -Z0 %*% solution.w))
   loss.v <- loss.v/nrow(Z0) # this is the MSPE
   return(invisible(loss.v))
@@ -649,16 +661,7 @@ Okay now that we've explore the loss function, let's actually use it to estimate
 
 The first thing the `Synth()` function does it normalised the matrices $X_i$ by the standard deviation:
 
-```{r ooptimisation}
-# some arguements that are helpful to set up at the start
-# optimxmethod <- c("Nelder-Mead","BFGS")
-# quadopt <-  "ipop"
-# Margin.ipop <- 0.0005
-# Sigf.ipop <- 5
-# Bound.ipop <-  10
-# all.methods <- FALSE
-
-# The first thing we do is normalise X by the standard deviation - this returns some scaled matrices to us (scaled by standard deviation of each predictor)
+```{r standardise matrices}
 nvarsV <- dim(X0)[1]
 big.dataframe <- cbind(X0, X1)
 divisor <- sqrt(apply(big.dataframe, 1, var))
@@ -668,45 +671,35 @@ scaled.matrix <- t(t(big.dataframe) %*% ( 1/(divisor) * diag(rep(dim(big.datafra
 # split the variances back out into X_1 and X_0
 X0.scaled <- scaled.matrix[, 1:ncol(X0), drop = FALSE]
 X1.scaled <- scaled.matrix[, ncol(scaled.matrix)]
+```
 
-# okay now we can set up the optimsiation problem
-## the package gives the option to use `genoud` but we won't go into that
-## for us we can set the initial parameter guesses as equal weight
+Now that we've scaled the input matrices, we can set up the optimsiation problem. The package itself is a little bit more complicated when setting the initial values for $V$, but for us we can set the initial paramater guesses for $V$ as equal weights as `SV1`. Then we can put all the variables into the `optimx()` function and return the solution for $V$:
 
+```{r V optimisation}
 SV1 <- rep(1/nvarsV,nvarsV)
 
 # now we can estimate the parameters
 opt_res <- optimx::optimx(par=SV1, # initial guesses
                   fn=V_MSPE, # V MSPE function
-                  # gr=NULL, # gradient not provided
-                  # hess=NULL, # donhessian not procided
                   method=c("Nelder-Mead","BFGS"),
-                  # itnmax=NULL, # no max iterations
-                  # hessian=FALSE, # don't return hessian
-                  # control=list(kkt=FALSE,
-                  #              starttests=FALSE,
-                  #              dowarn=FALSE,
-                  #              all.methods=FALSE),
                   X0.scaled = X0.scaled,
                   X1.scaled = X1.scaled,
                   Z0 = Z0,
-                  Z1 = Z1#,
-                  # quadopt = quadopt,
-                  # margin.ipop = Margin.ipop,
-                  # sigf.ipop = Sigf.ipop,
-                  # bound.ipop = Bound.ipop
+                  Z1 = Z1
                   )
 
-# the collect.otpimx() is just a helpful little function that returns the parameters of itnerest for use
+# the collect.otpimx() is just a helpful little function that returns the parameters of interest for use
 # run this code if you want to have a look at it
 # view(collect.optimx)
 
 opt_res <- collect.optimx(opt_res,"min")
 
 solution.v  <- abs(opt_res$par)/sum(abs(opt_res$par))
+```
 
-# great now that we have the solution for V* we can recover W(V*):
+Great, we now have the solution for $V^*$, so we can we can now estimate $W(V*)$ using the `ipop` function *(note that is basically that same as the guesses we used in the `MSPE_V()` function above)*:
 
+```{r W optimisation}
 # below is functionally the same code as the function we explored above, but now we have V
 V <- diag(x=as.numeric(solution.v),nrow=nvarsV,ncol=nvarsV) # solution from optimisation problem above acts as our V
 H <- t(X0.scaled) %*% V %*% (X0.scaled) 
@@ -743,6 +736,8 @@ loss.w <- t(X1.scaled - X0.scaled %*% solution.w) %*% V %*% (X1.scaled - X0.scal
 loss.v <- t(Z1 - Z0 %*% as.matrix(solution.w)) %*% (Z1 - Z0 %*% as.matrix(solution.w)) /nrow(Z0)      
 
 ```
+
+Great! Now let's see if these results are the same as the ones we saw when using the `Synth()` function in the example.
 
 ```{r results}
 # now we have the optimised solutions for W(V)
@@ -789,10 +784,10 @@ data_plot2 %>%
 
 Okay great, we've recreated the main analysis we saw from the simple application above! 
 
-Now that we've explored what's going on under the hood, I am thankful you can just call `Synth()` instead of having to code this up everytime. I hope you are too!
+Now that we've explored what's going on under the hood, I am thankful you can just call `Synth()` instead of having to code this up every time. I hope you are too!
 
 Big thanks to the author(s) for writing up this amazing package :) and I hope this was a helpful little primer. 
 
-For more I really recommend this explanation for a general and practical intro (plus it's in python which is cool): https://matheusfacure.github.io/python-causality-handbook/15-Synthetic-Control.html. 
+For more I really recommend this explanation for a general and practical intro *(plus it's in python which is cool)*: https://matheusfacure.github.io/python-causality-handbook/15-Synthetic-Control.html. 
 
 I also recommend this paper that explores the practical applications of synthetic control in a more academic style: https://par.nsf.gov/servlets/purl/10331930. 
