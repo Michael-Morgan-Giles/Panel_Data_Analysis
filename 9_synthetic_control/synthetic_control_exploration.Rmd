@@ -254,23 +254,23 @@ data_plot %>%
   labs(title = "Path Plot of Actual vs Synthetic Outcomes",
        x = "Year",
        y = "Metric tons per capita (CO2 from transport)") +
-  scale_color_manual(name = "Outcome", values = c("Actual" = "cornflowerblue", "Synthetic" = "blue")) +
+  scale_color_manual(name = "Outcome", values = c("Actual" = "blue", "Synthetic" = "black")) +
   theme_classic()+
   theme(legend.position = "top")+
-  geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
+  geom_vline(xintercept = 1990, linetype = 'dashed', color = "grey")
 
 
 ## gap plot
 data_plot %>% 
   ggplot(aes(x = year, color)) +
-  geom_line(aes(y = effects), color = "blue") +
+  geom_line(aes(y = effects), color = "black") +
   labs(title = "Gap plot of calculated effect",
        x = "Year",
        y = "Gap in metric tons per capita (CO2 from transport)") +
   theme_classic()+
   theme(legend.position = "top")+
-  geom_hline(yintercept = 0, linetype = 'dashed', color = "black")+
-  geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
+  geom_hline(yintercept = 0, linetype = 'dashed', color = "grey")+
+  geom_vline(xintercept = 1990, linetype = 'dashed', color = "grey")
 ```
 
 
@@ -342,9 +342,9 @@ data_long$Year <- as.integer(data_long$rn)
 data_long %>% 
   ggplot(aes(x = Year, y = Gap, group = Country)) +
   geom_line(data = subset(data_long, Country != "Sweden"), 
-            aes(color = "Control Countries"), color = "cornflowerblue", alpha = 0.4) +
+            aes(color = "Control Countries"), color = "blue", alpha = 0.4) +
   geom_line(data = subset(data_long, Country == "Sweden"), 
-            aes(color = "Sweden"), color = "blue", linewidth = 1) +
+            aes(color = "Sweden"), color = "black", linewidth = 1) +
   geom_vline(xintercept = 1990, linetype = "dotted", linewidth = 1) +
   geom_hline(yintercept = 0, linetype = "dashed", linewidth = 1) +
   scale_x_continuous(breaks = seq(1960, 2005, 5)) +
@@ -373,7 +373,7 @@ Another property of SC is the sparsity of weights. In the plot below we can see 
 data.frame(country = synth_tables$tab.w$unit.names,
            Weight = synth_tables$tab.w$w.weights) %>% 
   ggplot(aes(x = reorder(country, -Weight), y = Weight)) +
-  geom_bar(stat = "identity", fill = "cornflowerblue", color = "blue", alpha = 0.4) +
+  geom_bar(stat = "identity", fill = "blue", color = "black", alpha = 0.4) +
   labs(title = "Synthetic Control Unit Weights",
        x = "Countries",
        y = "Weights") +
@@ -779,10 +779,10 @@ data_plot2 %>%
   labs(title = "Path Plot of Actual vs Synthetic Outcomes",
        x = "Year",
        y = "Metric tons per capita (CO2 from transport)") +
-  scale_color_manual(name = "Outcome", values = c("Actual" = "cornflowerblue", "Synthetic" = "blue")) +
+  scale_color_manual(name = "Outcome", values = c("Actual" = "blue", "Synthetic" = "black")) +
   theme_classic()+
   theme(legend.position = "top")+
-  geom_vline(xintercept = 1990, linetype = 'dashed', color = "black")
+  geom_vline(xintercept = 1990, linetype = 'dashed', color = "grey")
 ```
 
 Okay great, we've recreated the main analysis we saw from the application above! 
